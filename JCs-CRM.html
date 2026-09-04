@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Route Book">
+<title>Route Book — Merchant CRM</title>
+<style>
+  :root{
+    --ink:#1B2430;
+    --ink-soft:#57626F;
+    --paper:#EEF1F4;
+    --surface:#FFFFFF;
+    --line:#D9DEE3;
+    --accent:#2F5D8A;
+    --accent-ink:#FFFFFF;
+    --ok:#2F7D4F;
+    --ok-bg:#E4F2E9;
+    --warn:#C77F1D;
+    --warn-bg:#FBEEDC;
+    --bad:#B23A32;
+    --bad-bg:#F8E6E4;
+    --won:#2F7D4F;
+    --lost:#8A8F96;
+    --radius:10px;
+    --tabbar-h:64px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior-y:none;
+  }
+  #app{
+    max-width:560px;
+    margin:0 auto;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    background:var(--paper);
+  }
+  header.topbar{
+    position:sticky; top:0; z-index:20;
+    background:rgba(238,241,244,0.92);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  header.topbar h1{
+    margin:0;
+    font-size:22px;
+    font-weight:700;
+    letter-spacing:-0.01em;
+  }
+  header.topbar p.sub{
+    margin:2px 0 0;
+    font-size:13px;
+    color:var(--ink-soft);
+  }
+  main{
+    flex:1;
+    padding:14px 16px calc(var(--tabbar-h) + 28px);
+  }
+  nav.tabbar{
+    position:fixed;
+    left:0; right:0; bottom:0;
+    max-width:560px;
+    margin:0 auto;
+    height:calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+    padding-bottom:env(safe-area-inset-bottom);
+    background:rgba(255,255,255,0.94);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    border-top:1px solid var(--line);
+    display:flex;
+    z-index:30;
+  }
+  nav.tabbar button{
+    flex:1;
+    border:none;
+    background:none;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:3px;
+    font-size:11px;
+    color:var(--ink-soft);
+    font-family:inherit;
+    padding:6px 0 0;
+  }
+  nav.tabbar button .ic{font-size:20px; line-height:1;}
+  nav.tabbar button.active{color:var(--accent); font-weight:600;}
+
+  h2.section-title{
+    font-size:13px;
+    text-transform:none;
+    color:var(--ink-soft);
+    margin:20px 2px 8px;
+    font-weight:600;
+  }
+  h2.section-title:first-child{margin-top:2px;}
+
+  .ledger{
+    background:var(--surface);
+    border-radius:var(--radius);
+    border:1px solid var(--line);
+    overflow:hidden;
+  }
+  .row{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:13px 14px;
+    border-bottom:1px solid var(--line);
+    position:relative;
+  }
+  .row:last-child{border-bottom:none;}
+  .row .bar{
+    width:4px; align-self:stretch; border-radius:2px; flex:none;
+    min-height:36px;
+  }
+  .row .body{flex:1; min-width:0;}
+  .row .biz{font-size:15px; font-weight:600; color:var(--ink);}
+  .row .meta{font-size:12.5px; color:var(--ink-soft); margin-top:2px;}
+  .row .when{font-size:12px; font-weight:600; flex:none; text-align:right; white-space:nowrap;}
+  .chip{
+    display:inline-block;
+    font-size:11px;
+    font-weight:600;
+    padding:2px 8px;
+    border-radius:20px;
+  }
+  .chip.ok{background:var(--ok-bg); color:var(--ok);}
+  .chip.warn{background:var(--warn-bg); color:var(--warn);}
+  .chip.bad{background:var(--bad-bg); color:var(--bad);}
+  .chip.won{background:var(--ok-bg); color:var(--won);}
+  .chip.lost{background:#EEE; color:var(--lost);}
+
+  .empty{
+    text-align:center;
+    color:var(--ink-soft);
+    font-size:14px;
+    padding:38px 20px;
+    background:var(--surface);
+    border-radius:var(--radius);
+    border:1px dashed var(--line);
+  }
+
+  label{display:block; font-size:13px; font-weight:600; color:var(--ink-soft); margin:16px 2px 6px;}
+  label:first-of-type{margin-top:2px;}
+  input[type=text], input[type=date], input[type=datetime-local], textarea, select{
+    width:100%;
+    font-family:inherit;
+    font-size:16px;
+    padding:11px 12px;
+    border-radius:8px;
+    border:1px solid var(--line);
+    background:var(--surface);
+    color:var(--ink);
+  }
+  textarea{resize:vertical; min-height:64px;}
+  .staff-row{display:flex; gap:8px; margin-bottom:8px;}
+  .staff-row input{flex:1;}
+  .staff-row button{flex:none; width:38px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--bad); font-size:18px; font-family:inherit;}
+  .btn{
+    display:block; width:100%;
+    text-align:center;
+    font-family:inherit;
+    font-size:16px; font-weight:600;
+    padding:13px;
+    border-radius:10px;
+    border:none;
+    cursor:pointer;
+  }
+  .btn-primary{background:var(--accent); color:var(--accent-ink);}
+  .btn-secondary{background:var(--surface); color:var(--accent); border:1px solid var(--line);}
+  .btn-ghost{background:none; color:var(--ink-soft); border:1px solid var(--line);}
+  .btn-add-staff{background:none; color:var(--accent); border:1px dashed var(--line); font-size:14px; padding:9px;}
+  .stack > * + *{margin-top:10px;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+
+  .detail-card{background:var(--surface); border-radius:var(--radius); border:1px solid var(--line); padding:16px;}
+  .detail-card h3{margin:0 0 2px; font-size:19px;}
+  .detail-card .owner{color:var(--ink-soft); font-size:14px; margin:0 0 10px;}
+  .kv{display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid var(--line); font-size:14px;}
+  .kv span:first-child{color:var(--ink-soft);}
+  .kv span:last-child{font-weight:600; text-align:right; max-width:60%;}
+
+  .history{margin-top:8px;}
+  .hist-item{display:flex; gap:10px; padding:10px 0; border-top:1px solid var(--line);}
+  .hist-item .dot{width:8px; height:8px; border-radius:50%; background:var(--accent); margin-top:6px; flex:none;}
+  .hist-item .txt{font-size:13.5px;}
+  .hist-item .txt b{font-weight:600;}
+  .hist-item .date{font-size:11.5px; color:var(--ink-soft); margin-top:1px;}
+
+  .action-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;}
+  .action-btn{
+    padding:14px 10px;
+    border-radius:10px;
+    border:1px solid var(--line);
+    background:var(--surface);
+    font-family:inherit;
+    text-align:left;
+    cursor:pointer;
+  }
+  .action-btn .t{font-size:14px; font-weight:700; display:block;}
+  .action-btn .d{font-size:11.5px; color:var(--ink-soft); display:block; margin-top:2px;}
+  .action-btn.pos{border-color:#BFE0CC;}
+  .action-btn.pos .t{color:var(--ok);}
+  .action-btn.warn{border-color:#F0D6A6;}
+  .action-btn.warn .t{color:var(--warn);}
+  .action-btn.neg{border-color:#E6BEBA;}
+  .action-btn.neg .t{color:var(--bad);}
+
+  .backbtn{background:none; border:none; color:var(--accent); font-family:inherit; font-size:16px; padding:6px 0 4px; cursor:pointer;}
+
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(20,26,33,0.4);
+    display:flex; align-items:flex-end; z-index:50;
+  }
+  .modal{
+    background:var(--surface);
+    width:100%; max-width:560px; margin:0 auto;
+    border-radius:16px 16px 0 0;
+    padding:18px 18px calc(env(safe-area-inset-bottom) + 18px);
+    max-height:85vh; overflow-y:auto;
+  }
+  .modal h3{margin-top:0;}
+  .toast{
+    position:fixed; bottom:calc(var(--tabbar-h) + 18px); left:50%; transform:translateX(-50%);
+    background:var(--ink); color:#fff; font-size:13.5px; padding:10px 16px; border-radius:20px;
+    z-index:60; opacity:0; pointer-events:none; transition:opacity .25s ease;
+  }
+  .toast.show{opacity:1;}
+  .note{font-size:12.5px; color:var(--ink-soft); line-height:1.5;}
+  .backup-card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px;}
+  .backup-card h3{margin:0 0 6px; font-size:15px;}
+  .search{margin-bottom:12px;}
+  .filter-row{display:flex; gap:8px; margin-bottom:12px; overflow-x:auto; padding-bottom:2px;}
+  .filter-pill{flex:none; font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:20px; border:1px solid var(--line); background:var(--surface); color:var(--ink-soft); font-family:inherit;}
+  .filter-pill.on{background:var(--accent); color:#fff; border-color:var(--accent);}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- storage ---------- */
+const STORE_KEY = 'routebook_v1';
+function loadData(){
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return {businesses:[]};
+}
+function saveData(){ localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); }
+let DATA = loadData();
+
+/* ---------- helpers ---------- */
+function uid(){ return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function addDays(iso, n){ const d = new Date(iso+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function fmtDate(iso){
+  if(!iso) return '—';
+  const d = new Date(iso+'T12:00:00');
+  return d.toLocaleDateString('en-US',{month:'short', day:'numeric', year:'numeric'});
+}
+function fmtDateShort(iso){
+  const d = new Date(iso+'T12:00:00');
+  return d.toLocaleDateString('en-US',{month:'short', day:'numeric'});
+}
+function daysUntil(iso){
+  const d = new Date(iso+'T12:00:00'), t = new Date(todayISO()+'T12:00:00');
+  return Math.round((d-t)/86400000);
+}
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._h);
+  toast._h = setTimeout(()=>t.classList.remove('show'), 1800);
+}
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- status / urgency ---------- */
+function urgency(biz){
+  if(biz.closed) return 'closed';
+  if(!biz.nextFollowUp) return 'none';
+  const d = daysUntil(biz.nextFollowUp);
+  if(d < 0) return 'overdue';
+  if(d === 0) return 'today';
+  if(d <= 7) return 'soon';
+  return 'later';
+}
+function urgencyChip(biz){
+  const u = urgency(biz);
+  if(biz.closed === 'won') return '<span class="chip won">Signed</span>';
+  if(biz.closed === 'lost') return '<span class="chip lost">Went another direction</span>';
+  if(u==='overdue') return `<span class="chip bad">${-daysUntil(biz.nextFollowUp)}d overdue</span>`;
+  if(u==='today') return '<span class="chip bad">Due today</span>';
+  if(u==='soon') return `<span class="chip warn">Due ${fmtDateShort(biz.nextFollowUp)}</span>`;
+  if(u==='later') return `<span class="chip ok">Due ${fmtDateShort(biz.nextFollowUp)}</span>`;
+  return '';
+}
+function barColor(biz){
+  const u = urgency(biz);
+  if(biz.closed==='won') return 'var(--ok)';
+  if(biz.closed==='lost') return 'var(--lost)';
+  if(u==='overdue'||u==='today') return 'var(--bad)';
+  if(u==='soon') return 'var(--warn)';
+  return 'var(--ok)';
+}
+const ACTION_LABEL = {
+  interested:'Interested — follow up in a week',
+  meeting_set:'Meeting set',
+  gatekeeper:'Hit a gatekeeper',
+  not_interested:'Not interested',
+  undecided:'Undecided after meeting',
+  signed:'Signed',
+  demo_scheduled:'Demo scheduled',
+  not_closed:"Didn't close — went another direction",
+  first_contact:'First visit logged'
+};
+
+/* ---------- state ---------- */
+let VIEW = 'dashboard'; // dashboard | list | add | detail | backup
+let DETAIL_ID = null;
+
+/* ---------- render root ---------- */
+function render(){
+  const app = document.getElementById('app');
+  let body = '';
+  if(VIEW==='dashboard') body = renderDashboard();
+  else if(VIEW==='list') body = renderList();
+  else if(VIEW==='add') body = renderAdd();
+  else if(VIEW==='detail') body = renderDetail();
+  else if(VIEW==='backup') body = renderBackup();
+
+  app.innerHTML = `
+    <header class="topbar">
+      <h1>${headerTitle()}</h1>
+      <p class="sub">${headerSub()}</p>
+    </header>
+    <main>${body}</main>
+    <nav class="tabbar">
+      <button data-tab="dashboard" class="${VIEW==='dashboard'?'active':''}"><span class="ic">◔</span>Dashboard</button>
+      <button data-tab="list" class="${VIEW==='list'?'active':''}"><span class="ic">☰</span>Businesses</button>
+      <button data-tab="add" class="${VIEW==='add'?'active':''}"><span class="ic">＋</span>Add</button>
+      <button data-tab="backup" class="${VIEW==='backup'?'active':''}"><span class="ic">⤓</span>Backup</button>
+    </nav>
+  `;
+  bindTabs();
+  bindViewHandlers();
+}
+function headerTitle(){
+  if(VIEW==='dashboard') return 'Route Book';
+  if(VIEW==='list') return 'Businesses';
+  if(VIEW==='add') return 'Log a Visit';
+  if(VIEW==='detail'){ const b = DATA.businesses.find(x=>x.id===DETAIL_ID); return b? b.businessName : 'Business'; }
+  if(VIEW==='backup') return 'Backup & Restore';
+}
+function headerSub(){
+  if(VIEW==='dashboard') return new Date().toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric'});
+  if(VIEW==='list') return `${DATA.businesses.length} stop${DATA.businesses.length===1?'':'s'} on record`;
+  if(VIEW==='add') return 'New stop or new contact at an existing stop';
+  if(VIEW==='detail'){ const b = DATA.businesses.find(x=>x.id===DETAIL_ID); return b? (b.ownerName||'No owner name on file') : ''; }
+  if(VIEW==='backup') return 'Everything stays on this phone';
+}
+function bindTabs(){
+  document.querySelectorAll('nav.tabbar button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      VIEW = btn.dataset.tab;
+      if(VIEW==='add') ADD_DRAFT = null;
+      render();
+    });
+  });
+}
+
+/* ================= DASHBOARD ================= */
+function renderDashboard(){
+  const active = DATA.businesses.filter(b=>!b.closed && b.nextFollowUp);
+  const overdue = active.filter(b=>daysUntil(b.nextFollowUp) < 0).sort((a,c)=>a.nextFollowUp.localeCompare(c.nextFollowUp));
+  const today = active.filter(b=>daysUntil(b.nextFollowUp) === 0);
+  const soon = active.filter(b=>{const d=daysUntil(b.nextFollowUp); return d>0 && d<=7;}).sort((a,c)=>a.nextFollowUp.localeCompare(c.nextFollowUp));
+  const noOutcome = DATA.businesses.filter(b=>!b.closed && !b.nextFollowUp);
+
+  if(!DATA.businesses.length){
+    return `<div class="empty">No stops logged yet.<br><br>Tap <b>Add</b> to log your first visit.</div>`;
+  }
+
+  let html = '';
+  if(overdue.length){
+    html += `<h2 class="section-title">Go back — overdue (${overdue.length})</h2>`;
+    html += bizLedger(overdue);
+  }
+  if(today.length){
+    html += `<h2 class="section-title">Due today</h2>`;
+    html += bizLedger(today);
+  }
+  if(soon.length){
+    html += `<h2 class="section-title">Coming up this week</h2>`;
+    html += bizLedger(soon);
+  }
+  if(noOutcome.length){
+    html += `<h2 class="section-title">Needs an outcome logged</h2>`;
+    html += bizLedger(noOutcome);
+  }
+  if(!overdue.length && !today.length && !soon.length && !noOutcome.length){
+    html += `<div class="empty">You're clear. Nothing due this week.</div>`;
+  }
+  return html;
+}
+function bizLedger(list){
+  return `<div class="ledger">${list.map(b=>`
+    <div class="row" data-open="${b.id}">
+      <div class="bar" style="background:${barColor(b)}"></div>
+      <div class="body">
+        <div class="biz">${escapeHtml(b.businessName)}</div>
+        <div class="meta">${escapeHtml(b.ownerName||'No owner listed')} · ${ACTION_LABEL[b.lastAction]||''}</div>
+      </div>
+      <div class="when">${urgencyChip(b)}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
+/* ================= LIST ================= */
+let LIST_FILTER = 'all';
+let LIST_SEARCH = '';
+function renderList(){
+  let list = DATA.businesses.slice();
+  if(LIST_FILTER==='active') list = list.filter(b=>!b.closed);
+  if(LIST_FILTER==='won') list = list.filter(b=>b.closed==='won');
+  if(LIST_FILTER==='lost') list = list.filter(b=>b.closed==='lost');
+  if(LIST_SEARCH){
+    const q = LIST_SEARCH.toLowerCase();
+    list = list.filter(b=> (b.businessName+' '+(b.ownerName||'')).toLowerCase().includes(q));
+  }
+  list.sort((a,c)=> (a.nextFollowUp||'9999').localeCompare(c.nextFollowUp||'9999'));
+
+  return `
+    <input class="search" type="text" placeholder="Search businesses…" id="searchBox" value="${escapeHtml(LIST_SEARCH)}">
+    <div class="filter-row">
+      ${['all','active','won','lost'].map(f=>`<button class="filter-pill ${LIST_FILTER===f?'on':''}" data-filter="${f}">${f[0].toUpperCase()+f.slice(1)}</button>`).join('')}
+    </div>
+    ${list.length ? bizLedger(list) : `<div class="empty">No businesses match.</div>`}
+  `;
+}
+
+/* ================= ADD ================= */
+let ADD_DRAFT = null;
+function freshDraft(){ return {businessName:'', ownerName:'', email:'', posSystem:'', staff:['']}; }
+function renderAdd(){
+  if(!ADD_DRAFT) ADD_DRAFT = freshDraft();
+  const d = ADD_DRAFT;
+  return `
+    <div class="stack">
+      <label>Business name</label>
+      <input type="text" id="f_biz" value="${escapeHtml(d.businessName)}" placeholder="e.g. Riverside Diner">
+      <label>Owner's name</label>
+      <input type="text" id="f_owner" value="${escapeHtml(d.ownerName)}" placeholder="e.g. Maria Chen">
+      <label>Email address</label>
+      <input type="text" id="f_email" value="${escapeHtml(d.email)}" placeholder="e.g. maria@riversidediner.com">
+      <label>POS system</label>
+      <input type="text" id="f_pos" value="${escapeHtml(d.posSystem)}" placeholder="e.g. Toast, Square, Clover">
+      <label>Staff you met</label>
+      <div id="staffList">
+        ${d.staff.map((s,i)=>`
+          <div class="staff-row">
+            <input type="text" data-staff-idx="${i}" value="${escapeHtml(s)}" placeholder="Name">
+            ${d.staff.length>1 ? `<button data-remove-staff="${i}">×</button>` : ''}
+          </div>`).join('')}
+      </div>
+      <button class="btn btn-add-staff" id="addStaffBtn">+ Add another name</button>
+      <label>Visit date</label>
+      <input type="date" id="f_date" value="${todayISO()}">
+      <button class="btn btn-primary" id="saveVisitBtn" style="margin-top:22px;">Save & choose next step</button>
+    </div>
+  `;
+}
+
+/* ================= DETAIL ================= */
+function renderDetail(){
+  const b = DATA.businesses.find(x=>x.id===DETAIL_ID);
+  if(!b){ VIEW='list'; return renderList(); }
+  const staffLine = (b.staff||[]).filter(Boolean).join(', ') || 'None on file';
+
+  const stage2 = !!b.hadMeeting;
+  let actions = '';
+  if(!b.closed){
+    actions = stage2 ? renderStage2Actions() : renderStage1Actions();
+  }
+
+  const canUndo = (b.undoStack||[]).length > 0;
+
+  return `
+    <button class="backbtn" data-back>‹ Back</button>
+    <div class="detail-card">
+      <h3>${escapeHtml(b.businessName)}</h3>
+      <p class="owner">${escapeHtml(b.ownerName||'No owner name on file')}</p>
+      ${urgencyChip(b)}
+      <div class="kv"><span>Email</span><span>${escapeHtml(b.email||'—')}</span></div>
+      <div class="kv"><span>POS system</span><span>${escapeHtml(b.posSystem||'—')}</span></div>
+      <div class="kv"><span>Staff met</span><span>${escapeHtml(staffLine)}</span></div>
+      <div class="kv"><span>First visit</span><span>${fmtDate(b.firstContactDate)}</span></div>
+      <div class="kv"><span>Last action</span><span>${ACTION_LABEL[b.lastAction]||'—'}</span></div>
+      ${b.meetingDateTime ? `<div class="kv"><span>Meeting</span><span>${new Date(b.meetingDateTime).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span></div>` : ''}
+    </div>
+
+    ${b.email ? `
+    <div class="grid2" style="margin-top:10px;">
+      <a class="btn btn-secondary" href="mailto:${escapeHtml(b.email)}?subject=${encodeURIComponent(b.businessName)}">Email them</a>
+      <button class="btn btn-secondary" id="editBizBtn">Edit info</button>
+    </div>` : `
+    <button class="btn btn-secondary" id="editBizBtn" style="margin-top:10px;">Edit info</button>`}
+
+    ${actions}
+    ${canUndo ? `<button class="btn btn-ghost" id="undoActionBtn" style="margin-top:10px;">‹ Back a step</button>` : ''}
+
+    <h2 class="section-title">History</h2>
+    <div class="detail-card history">
+      ${(b.history||[]).slice().reverse().map(h=>`
+        <div class="hist-item">
+          <div class="dot"></div>
+          <div>
+            <div class="txt"><b>${escapeHtml(h.label)}</b>${h.note? ' — '+escapeHtml(h.note):''}</div>
+            <div class="date">${fmtDate(h.date)}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+
+    <button class="btn btn-ghost" id="deleteBizBtn" style="margin-top:18px;">Delete this business</button>
+  `;
+}
+function renderStage1Actions(){
+  return `
+    <h2 class="section-title">What happened?</h2>
+    <div class="action-grid">
+      <button class="action-btn pos" data-action="interested"><span class="t">Interested</span><span class="d">Follow up in 1 week</span></button>
+      <button class="action-btn pos" data-action="meeting_set"><span class="t">Set a meeting</span><span class="d">Add to calendar</span></button>
+      <button class="action-btn warn" data-action="gatekeeper"><span class="t">Hit a gatekeeper</span><span class="d">Come back in 30 days</span></button>
+      <button class="action-btn neg" data-action="not_interested"><span class="t">Not interested</span><span class="d">Come back in 3–6 months</span></button>
+    </div>
+  `;
+}
+function renderStage2Actions(){
+  return `
+    <h2 class="section-title">Where did the meeting leave things?</h2>
+    <div class="action-grid">
+      <button class="action-btn warn" data-action="undecided"><span class="t">Undecided</span><span class="d">Check back in 1 week</span></button>
+      <button class="action-btn pos" data-action="signed"><span class="t">Signed</span><span class="d">Mark as won</span></button>
+      <button class="action-btn pos" data-action="demo_scheduled"><span class="t">Scheduled a demo</span><span class="d">Add to calendar</span></button>
+      <button class="action-btn neg" data-action="not_closed"><span class="t">Didn't close</span><span class="d">Went another direction</span></button>
+    </div>
+  `;
+}
+
+/* ================= BACKUP ================= */
+function renderBackup(){
+  return `
+    <div class="stack">
+      <div class="backup-card">
+        <h3>Export a backup</h3>
+        <p class="note">Downloads a single .json file with every business and its full history. Save it into Files → On My iPhone, iCloud Drive, or a connected external drive.</p>
+        <button class="btn btn-primary" id="exportBtn" style="margin-top:12px;">Export backup</button>
+      </div>
+      <div class="backup-card">
+        <h3>Restore from backup</h3>
+        <p class="note">Choose a previously exported .json file. This replaces everything currently on this phone.</p>
+        <input type="file" accept="application/json" id="importFile" style="margin-top:10px;">
+      </div>
+      <div class="backup-card">
+        <h3>About this app</h3>
+        <p class="note">Everything is stored only in this browser on this phone — nothing is sent to a server. If you clear Safari's website data, reinstall this page, or switch phones, you'll need a backup file to bring your data back. Export regularly, especially before doing anything to Safari's storage.</p>
+      </div>
+    </div>
+  `;
+}
+
+/* ================= event binding ================= */
+function bindViewHandlers(){
+  document.querySelectorAll('[data-open]').forEach(el=>{
+    el.addEventListener('click', ()=>{ DETAIL_ID = el.dataset.open; VIEW='detail'; render(); });
+  });
+
+  if(VIEW==='list'){
+    const sb = document.getElementById('searchBox');
+    if(sb) sb.addEventListener('input', e=>{ LIST_SEARCH = e.target.value; render(); setTimeout(()=>{const el=document.getElementById('searchBox'); if(el){el.focus(); el.selectionStart=el.selectionEnd=el.value.length;}},0); });
+    document.querySelectorAll('[data-filter]').forEach(el=>{
+      el.addEventListener('click', ()=>{ LIST_FILTER = el.dataset.filter; render(); });
+    });
+  }
+
+  if(VIEW==='add'){
+    document.getElementById('f_biz').addEventListener('input', e=>ADD_DRAFT.businessName=e.target.value);
+    document.getElementById('f_owner').addEventListener('input', e=>ADD_DRAFT.ownerName=e.target.value);
+    document.getElementById('f_email').addEventListener('input', e=>ADD_DRAFT.email=e.target.value);
+    document.getElementById('f_pos').addEventListener('input', e=>ADD_DRAFT.posSystem=e.target.value);
+    document.querySelectorAll('[data-staff-idx]').forEach(el=>{
+      el.addEventListener('input', e=>{ ADD_DRAFT.staff[+el.dataset.staffIdx] = e.target.value; });
+    });
+    document.querySelectorAll('[data-remove-staff]').forEach(el=>{
+      el.addEventListener('click', ()=>{ ADD_DRAFT.staff.splice(+el.dataset.removeStaff,1); render(); });
+    });
+    document.getElementById('addStaffBtn').addEventListener('click', ()=>{ ADD_DRAFT.staff.push(''); render(); focusLastStaff(); });
+    document.getElementById('saveVisitBtn').addEventListener('click', saveNewVisit);
+  }
+
+  if(VIEW==='detail'){
+    const back = document.querySelector('[data-back]');
+    if(back) back.addEventListener('click', ()=>{ VIEW='list'; render(); });
+    document.querySelectorAll('[data-action]').forEach(el=>{
+      el.addEventListener('click', ()=>handleAction(el.dataset.action));
+    });
+    const editBtn = document.getElementById('editBizBtn');
+    if(editBtn) editBtn.addEventListener('click', ()=>openEditModal(DATA.businesses.find(x=>x.id===DETAIL_ID)));
+    const undoBtn = document.getElementById('undoActionBtn');
+    if(undoBtn) undoBtn.addEventListener('click', ()=>handleUndo());
+    const del = document.getElementById('deleteBizBtn');
+    if(del) del.addEventListener('click', ()=>{
+      if(confirm('Delete this business and its whole history? This can\'t be undone.')){
+        DATA.businesses = DATA.businesses.filter(b=>b.id!==DETAIL_ID);
+        saveData(); VIEW='list'; render(); toast('Deleted');
+      }
+    });
+  }
+
+  if(VIEW==='backup'){
+    document.getElementById('exportBtn').addEventListener('click', exportBackup);
+    document.getElementById('importFile').addEventListener('change', importBackup);
+  }
+}
+function focusLastStaff(){
+  const inputs = document.querySelectorAll('[data-staff-idx]');
+  if(inputs.length) inputs[inputs.length-1].focus();
+}
+
+function saveNewVisit(){
+  const d = ADD_DRAFT;
+  if(!d.businessName.trim()){ toast('Business name is required'); return; }
+  const dateEl = document.getElementById('f_date');
+  const visitDate = dateEl.value || todayISO();
+  const biz = {
+    id: uid(),
+    businessName: d.businessName.trim(),
+    ownerName: d.ownerName.trim(),
+    email: d.email.trim(),
+    posSystem: d.posSystem.trim(),
+    staff: d.staff.map(s=>s.trim()).filter(Boolean),
+    firstContactDate: visitDate,
+    lastAction: 'first_contact',
+    hadMeeting: false,
+    nextFollowUp: null,
+    closed: null,
+    meetingDateTime: null,
+    undoStack: [],
+    history: [{date:visitDate, label:'First visit logged', note: d.posSystem? ('POS: '+d.posSystem):''}]
+  };
+  DATA.businesses.push(biz);
+  saveData();
+  ADD_DRAFT = null;
+  DETAIL_ID = biz.id;
+  VIEW = 'detail';
+  render();
+  toast('Visit logged — choose what happened');
+}
+
+function snapshot(b){
+  if(!b.undoStack) b.undoStack = [];
+  b.undoStack.push({
+    lastAction:b.lastAction, hadMeeting:b.hadMeeting, nextFollowUp:b.nextFollowUp,
+    closed:b.closed, meetingDateTime:b.meetingDateTime
+  });
+}
+function handleUndo(){
+  const b = DATA.businesses.find(x=>x.id===DETAIL_ID);
+  if(!b || !(b.undoStack||[]).length) return;
+  const prev = b.undoStack.pop();
+  b.lastAction = prev.lastAction;
+  b.hadMeeting = prev.hadMeeting;
+  b.nextFollowUp = prev.nextFollowUp;
+  b.closed = prev.closed;
+  b.meetingDateTime = prev.meetingDateTime;
+  if(b.history.length > 1) b.history.pop();
+  saveData(); render(); toast('Reverted to previous step');
+}
+function openEditModal(b){
+  if(!b) return;
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Edit business</h3>
+      <label>Business name</label>
+      <input type="text" id="e_biz" value="${escapeHtml(b.businessName)}">
+      <label>Owner's name</label>
+      <input type="text" id="e_owner" value="${escapeHtml(b.ownerName||'')}">
+      <label>Email address</label>
+      <input type="text" id="e_email" value="${escapeHtml(b.email||'')}">
+      <label>POS system</label>
+      <input type="text" id="e_pos" value="${escapeHtml(b.posSystem||'')}">
+      <label>Staff (one per line)</label>
+      <textarea id="e_staff" rows="3">${escapeHtml((b.staff||[]).join('\n'))}</textarea>
+      <button class="btn btn-primary" id="saveEditBtn" style="margin-top:18px;">Save changes</button>
+      <button class="btn btn-ghost" id="cancelEditBtn" style="margin-top:10px;">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+  document.getElementById('cancelEditBtn').addEventListener('click', ()=>overlay.remove());
+  document.getElementById('saveEditBtn').addEventListener('click', ()=>{
+    const name = document.getElementById('e_biz').value.trim();
+    if(!name){ toast('Business name is required'); return; }
+    b.businessName = name;
+    b.ownerName = document.getElementById('e_owner').value.trim();
+    b.email = document.getElementById('e_email').value.trim();
+    b.posSystem = document.getElementById('e_pos').value.trim();
+    b.staff = document.getElementById('e_staff').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    saveData();
+    overlay.remove();
+    render();
+    toast('Business updated');
+  });
+}
+function handleAction(action){
+  const b = DATA.businesses.find(x=>x.id===DETAIL_ID);
+  if(!b) return;
+
+  if(action==='meeting_set'){ openMeetingModal(b, 'meeting_set'); return; }
+  if(action==='demo_scheduled'){ openMeetingModal(b, 'demo_scheduled'); return; }
+  if(action==='not_interested'){ openNotInterestedModal(b); return; }
+
+  snapshot(b);
+  const today = todayISO();
+  if(action==='interested'){
+    b.lastAction='interested'; b.nextFollowUp = addDays(today,7);
+    b.history.push({date:today, label:ACTION_LABEL.interested});
+  } else if(action==='gatekeeper'){
+    b.lastAction='gatekeeper'; b.nextFollowUp = addDays(today,30);
+    b.history.push({date:today, label:ACTION_LABEL.gatekeeper});
+  } else if(action==='undecided'){
+    b.lastAction='undecided'; b.nextFollowUp = addDays(today,7);
+    b.history.push({date:today, label:ACTION_LABEL.undecided});
+  } else if(action==='signed'){
+    b.lastAction='signed'; b.nextFollowUp=null; b.closed='won';
+    b.history.push({date:today, label:ACTION_LABEL.signed});
+  } else if(action==='not_closed'){
+    b.lastAction='not_closed'; b.nextFollowUp=null; b.closed='lost';
+    b.history.push({date:today, label:ACTION_LABEL.not_closed});
+  }
+  saveData(); render(); toast('Updated');
+}
+
+function openNotInterestedModal(b){
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Not interested</h3>
+      <p class="note">When should you come back?</p>
+      <div class="stack" style="margin-top:14px;">
+        <button class="btn btn-secondary" data-mo="90">Come back in 3 months</button>
+        <button class="btn btn-secondary" data-mo="180">Come back in 6 months</button>
+        <button class="btn btn-ghost" data-mo="cancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{
+    if(e.target===overlay){ overlay.remove(); return; }
+    const btn = e.target.closest('[data-mo]');
+    if(!btn) return;
+    if(btn.dataset.mo==='cancel'){ overlay.remove(); return; }
+    const days = +btn.dataset.mo;
+    const today = todayISO();
+    snapshot(b);
+    b.lastAction='not_interested';
+    b.nextFollowUp = addDays(today, days);
+    b.history.push({date:today, label:ACTION_LABEL.not_interested, note:(days===90?'3 month':'6 month')+' revisit'});
+    saveData(); overlay.remove(); render(); toast('Updated');
+  });
+}
+
+function openMeetingModal(b, action){
+  const isDemo = action==='demo_scheduled';
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay';
+  const now = new Date(); now.setMinutes(0,0,0); now.setHours(now.getHours()+24);
+  const defaultVal = now.toISOString().slice(0,16);
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>${isDemo? 'Schedule the demo' : 'Set the meeting'}</h3>
+      <label>Date & time</label>
+      <input type="datetime-local" id="meetingDT" value="${defaultVal}">
+      <button class="btn btn-primary" id="confirmMeeting" style="margin-top:18px;">Save & add to calendar</button>
+      <button class="btn btn-ghost" id="cancelMeeting" style="margin-top:10px;">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+  document.getElementById('cancelMeeting').addEventListener('click', ()=>overlay.remove());
+  document.getElementById('confirmMeeting').addEventListener('click', ()=>{
+    const val = document.getElementById('meetingDT').value;
+    if(!val){ toast('Pick a date & time'); return; }
+    const today = todayISO();
+    const dt = new Date(val);
+    const followUpDate = dt.toISOString().slice(0,10);
+    snapshot(b);
+    if(isDemo){
+      b.lastAction='demo_scheduled'; b.nextFollowUp = followUpDate;
+      b.history.push({date:today, label:ACTION_LABEL.demo_scheduled, note:'Demo on '+fmtDate(followUpDate)});
+    } else {
+      b.lastAction='meeting_set'; b.hadMeeting=true; b.meetingDateTime = dt.toISOString(); b.nextFollowUp = followUpDate;
+      b.history.push({date:today, label:ACTION_LABEL.meeting_set, note:'Meeting on '+fmtDate(followUpDate)});
+    }
+    saveData();
+    downloadICS(b, dt, isDemo? 'Demo' : 'Meeting');
+    overlay.remove(); render(); toast('Saved — opening calendar file');
+  });
+}
+
+function downloadICS(b, dt, kind){
+  const end = new Date(dt.getTime()+60*60*1000);
+  const fmt = d=> d.toISOString().replace(/[-:]/g,'').split('.')[0]+'Z';
+  const ics = [
+    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//RouteBook//EN','BEGIN:VEVENT',
+    'UID:'+uid()+'@routebook',
+    'DTSTAMP:'+fmt(new Date()),
+    'DTSTART:'+fmt(dt),
+    'DTEND:'+fmt(end),
+    'SUMMARY:'+kind+' — '+b.businessName,
+    'DESCRIPTION:'+kind+' with '+(b.ownerName||'contact')+' at '+b.businessName,
+    'END:VEVENT','END:VCALENDAR'
+  ].join('\r\n');
+  const blob = new Blob([ics], {type:'text/calendar'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = b.businessName.replace(/[^a-z0-9]+/gi,'_')+'_'+kind.toLowerCase()+'.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+
+/* ================= backup ================= */
+function exportBackup(){
+  const blob = new Blob([JSON.stringify(DATA, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = todayISO();
+  a.href = url; a.download = 'routebook-backup-'+stamp+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  toast('Backup file created');
+}
+function importBackup(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = evt=>{
+    try{
+      const parsed = JSON.parse(evt.target.result);
+      if(!parsed || !Array.isArray(parsed.businesses)) throw new Error('bad format');
+      if(!confirm('This replaces all data currently on this phone with the backup file. Continue?')) return;
+      DATA = parsed;
+      saveData();
+      VIEW='dashboard';
+      render();
+      toast('Restored from backup');
+    }catch(err){
+      alert('That file doesn\'t look like a Route Book backup.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+render();
+</script>
+</body>
+</html>
