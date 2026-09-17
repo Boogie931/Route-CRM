@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Route Book">
 <title>Route Book — Merchant CRM</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --ink:#1B2430;
@@ -96,8 +97,14 @@
     font-family:inherit;
     padding:6px 0 0;
   }
-  nav.tabbar button .ic{font-size:20px; line-height:1;}
+  nav.tabbar button .ic{font-size:20px; line-height:1; position:relative;}
   nav.tabbar button.active{color:var(--accent); font-weight:600;}
+  nav.tabbar button .badge{
+    position:absolute; top:-4px; right:-10px;
+    background:var(--bad); color:#fff; font-size:9.5px; font-weight:700;
+    min-width:15px; height:15px; border-radius:8px; padding:0 3px;
+    display:flex; align-items:center; justify-content:center;
+  }
 
   h2.section-title{
     font-size:13px;
@@ -253,8 +260,50 @@
 <div id="app"></div>
 <div class="toast" id="toast"></div>
 
-<script>
-/* ---------- storage ---------- */
+<script type="module">
+/* ================= CONFIG — paste your own values in here ================= */
+// From Firebase console → Project settings → Your apps → (</>) web app.
+const firebaseConfig = {
+  apiKey: "AIzaSyCd5aejc-DxiyHe1xfTX2ukxppz2F8yk80",
+  authDomain: "route-book-6441f.firebaseapp.com",
+  projectId: "route-book-6441f",
+  storageBucket: "route-book-6441f.firebasestorage.app",
+  messagingSenderId: "635214103828",
+  appId: "1:635214103828:web:899efb6de9b6eb91d5ee01"
+};
+// From Google Cloud console → APIs & Services → Credentials → OAuth client ID.
+const GOOGLE_OAUTH_CLIENT_ID = "635214103828-dhbaml80eagi2njrvghoqq8lsum13662.apps.googleusercontent.com";
+// Only Google accounts in this list may sign in and see data (also enforced
+// server-side by the Firestore security rules — this is just the client UX).
+const ALLOWED_EMAILS = ["jeremy@feistpos.com"];
+const FIREBASE_CONFIGURED = firebaseConfig.apiKey !== "PASTE_ME" && GOOGLE_OAUTH_CLIENT_ID.indexOf("PASTE_ME") !== 0;
+
+/* ---------- Firebase (lazy-loaded only once configured) ---------- */
+let fb = null; // {app, auth, db, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch}
+async function loadFirebase(){
+  if(fb || !FIREBASE_CONFIGURED) return fb;
+  const [{initializeApp}, authMod, storeMod] = await Promise.all([
+    import("https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js"),
+    import("https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js"),
+    import("https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js")
+  ]);
+  const app = initializeApp(firebaseConfig);
+  const auth = authMod.getAuth(app);
+  const db = storeMod.getFirestore(app);
+  fb = {
+    app, auth, db,
+    GoogleAuthProvider: authMod.GoogleAuthProvider,
+    signInWithRedirect: authMod.signInWithRedirect,
+    getRedirectResult: authMod.getRedirectResult,
+    onAuthStateChanged: authMod.onAuthStateChanged,
+    signOut: authMod.signOut,
+    collection: storeMod.collection, doc: storeMod.doc, setDoc: storeMod.setDoc,
+    deleteDoc: storeMod.deleteDoc, onSnapshot: storeMod.onSnapshot, writeBatch: storeMod.writeBatch
+  };
+  return fb;
+}
+
+/* ---------- storage: localStorage cache + Firestore sync when signed in ---------- */
 const STORE_KEY = 'routebook_v1';
 function loadData(){
   try{
@@ -263,8 +312,124 @@ function loadData(){
   }catch(e){}
   return {businesses:[]};
 }
-function saveData(){ localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); }
+function saveData(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); }catch(e){} }
 let DATA = loadData();
+
+/* ---------- auth state ---------- */
+let AUTH_USER = null;       // Firebase user object, or null when signed out
+let AUTH_CHECKED = false;   // becomes true once we know the sign-in state (avoids flashing the sign-in screen)
+let UNSUB_SNAPSHOT = null;
+let GMAIL_TOKEN = null;     // in-memory only Gmail send-scope access token
+
+function bizCollection(){
+  return fb.collection(fb.db, 'users', AUTH_USER.uid, 'businesses');
+}
+function sanitize(biz){
+  // Firestore rejects `undefined` — drop the local-only helper fields and any undefined values.
+  const {_queuedId, ...rest} = biz;
+  const out = {};
+  Object.keys(rest).forEach(k=>{ if(rest[k]!==undefined) out[k]=rest[k]; });
+  return out;
+}
+function persistBusiness(biz){
+  if(!fb || !AUTH_USER) return;
+  fb.setDoc(fb.doc(bizCollection(), biz.id), sanitize(biz)).catch(()=>toast('Sync failed — will retry when online'));
+}
+function deleteBusinessRemote(id){
+  if(!fb || !AUTH_USER) return;
+  fb.deleteDoc(fb.doc(bizCollection(), id)).catch(()=>toast('Sync failed — will retry when online'));
+}
+function attachSnapshotListener(){
+  if(!fb || !AUTH_USER) return;
+  if(UNSUB_SNAPSHOT) UNSUB_SNAPSHOT();
+  UNSUB_SNAPSHOT = fb.onSnapshot(bizCollection(), snap=>{
+    DATA.businesses = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    saveData();
+    render();
+  }, ()=>toast('Sync connection lost'));
+}
+async function signInWithGoogle(){
+  try{
+    await loadFirebase();
+    if(!fb) return;
+    AUTH_INIT_ERROR = null;
+    const provider = new fb.GoogleAuthProvider();
+    fb.signInWithRedirect(fb.auth, provider);
+  }catch(e){
+    AUTH_INIT_ERROR = e && e.message ? e.message : 'Could not reach the sync service';
+    render();
+  }
+}
+async function signOutOfApp(){
+  if(UNSUB_SNAPSHOT){ UNSUB_SNAPSHOT(); UNSUB_SNAPSHOT=null; }
+  if(fb) await fb.signOut(fb.auth);
+  AUTH_USER = null; GMAIL_TOKEN = null;
+  render();
+}
+let AUTH_INIT_ERROR = null;
+async function initAuth(){
+  if(!FIREBASE_CONFIGURED){ AUTH_CHECKED = true; render(); return; }
+  try{
+    await loadFirebase();
+    try{ await fb.getRedirectResult(fb.auth); }catch(e){ /* surfaced via onAuthStateChanged/UI as needed */ }
+    fb.onAuthStateChanged(fb.auth, user=>{
+      AUTH_CHECKED = true;
+      if(user && ALLOWED_EMAILS.indexOf(user.email) === -1){
+        toast('That Google account is not authorized for this app');
+        fb.signOut(fb.auth);
+        AUTH_USER = null; render(); return;
+      }
+      AUTH_USER = user;
+      if(user) attachSnapshotListener();
+      render();
+    });
+  }catch(e){
+    AUTH_INIT_ERROR = e && e.message ? e.message : 'Could not reach the sync service';
+    AUTH_CHECKED = true;
+    render();
+  }
+}
+/* ---------- Gmail send (separate OAuth scope via Google Identity Services) ---------- */
+function waitForGIS(){
+  return new Promise((resolve,reject)=>{
+    const start = Date.now();
+    (function poll(){
+      if(window.google && window.google.accounts && window.google.accounts.oauth2) return resolve();
+      if(Date.now()-start > 8000) return reject(new Error('Google sign-in script did not load'));
+      setTimeout(poll, 150);
+    })();
+  });
+}
+function requestGmailToken(){
+  return new Promise(async (resolve,reject)=>{
+    try{ await waitForGIS(); }catch(e){ reject(e); return; }
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_OAUTH_CLIENT_ID,
+      scope: 'https://www.googleapis.com/auth/gmail.send',
+      hint: AUTH_USER ? AUTH_USER.email : undefined,
+      callback: (resp)=>{
+        if(resp && resp.access_token){ GMAIL_TOKEN = resp.access_token; resolve(GMAIL_TOKEN); }
+        else reject(new Error('No token returned'));
+      }
+    });
+    client.requestAccessToken({prompt: GMAIL_TOKEN ? '' : 'consent'});
+  });
+}
+function b64urlEncode(str){
+  return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+async function sendGmail(toEmail, subject, body){
+  if(!GMAIL_TOKEN){ await requestGmailToken(); }
+  const mime = ['To: '+toEmail, 'Subject: '+subject, 'Content-Type: text/plain; charset=utf-8', '', body].join('\r\n');
+  const res = await fetch('https://www.googleapis.com/gmail/v1/users/me/messages/send', {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+GMAIL_TOKEN, 'Content-Type':'application/json' },
+    body: JSON.stringify({raw: b64urlEncode(mime)})
+  });
+  if(res.status===401){ GMAIL_TOKEN=null; await requestGmailToken(); return sendGmail(toEmail, subject, body); }
+  if(!res.ok) throw new Error('Gmail send failed ('+res.status+')');
+  return true;
+}
 
 /* ---------- helpers ---------- */
 function uid(){ return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -322,6 +487,8 @@ function barColor(biz){
 const ACTION_LABEL = {
   interested:'Interested — follow up in a week',
   meeting_set:'Meeting set',
+  send_statement:'Sending their statement',
+  callback_later:'Asked to check back later',
   gatekeeper:'Hit a gatekeeper',
   not_interested:'Not interested',
   undecided:'Undecided after meeting',
@@ -330,20 +497,92 @@ const ACTION_LABEL = {
   not_closed:"Didn't close — went another direction",
   first_contact:'First visit logged'
 };
+function mapsLink(address){
+  if(!address) return '';
+  return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(address);
+}
+function parseCSV(text){
+  // Minimal CSV parser: handles quoted fields with commas/escaped quotes.
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const c = text[i], n = text[i+1];
+    if(inQuotes){
+      if(c==='"' && n==='"'){ field+='"'; i++; }
+      else if(c==='"'){ inQuotes=false; }
+      else field+=c;
+    } else {
+      if(c==='"') inQuotes=true;
+      else if(c===','){ row.push(field); field=''; }
+      else if(c==='\n' || c==='\r'){
+        if(c==='\r' && n==='\n') i++;
+        row.push(field); field='';
+        if(row.length>1 || row[0]!=='') rows.push(row);
+        row=[];
+      } else field+=c;
+    }
+  }
+  if(field!=='' || row.length){ row.push(field); rows.push(row); }
+  if(!rows.length) return [];
+  const headers = rows[0].map(h=>h.trim().toLowerCase());
+  return rows.slice(1).filter(r=>r.some(c=>c && c.trim())).map(r=>{
+    const obj = {};
+    headers.forEach((h,i)=>obj[h]=(r[i]||'').trim());
+    return obj;
+  });
+}
+function pick(obj, keys){
+  for(const k of keys){ if(obj[k]) return obj[k]; }
+  return '';
+}
 
 /* ---------- state ---------- */
-let VIEW = 'dashboard'; // dashboard | list | add | detail | backup
+let VIEW = 'dashboard'; // dashboard | today | list | add | detail | backup
 let DETAIL_ID = null;
 
 /* ---------- render root ---------- */
+function renderSetupNeeded(){
+  return `
+    <div style="padding:40px 20px; text-align:center;">
+      <h2 style="margin-bottom:10px;">Almost there</h2>
+      <p class="note">This copy of Route Book isn't connected to a sync account yet. Paste your Firebase config and Google OAuth client ID into the CONFIG section near the top of the script, then reload.</p>
+    </div>`;
+}
+function renderSignIn(){
+  return `
+    <div style="padding:60px 20px; text-align:center;">
+      <h2 style="margin-bottom:6px;">Route Book</h2>
+      ${AUTH_INIT_ERROR
+        ? `<p class="note" style="margin-bottom:24px; color:var(--bad);">Couldn't reach sync: ${escapeHtml(AUTH_INIT_ERROR)}. Check your connection and try again.</p>`
+        : `<p class="note" style="margin-bottom:24px;">Sign in to sync your businesses across your phone, iPad, and computer.</p>`}
+      <button class="btn btn-primary" id="signInBtn">${AUTH_INIT_ERROR?'Try again':'Sign in with Google'}</button>
+    </div>`;
+}
 function render(){
   const app = document.getElementById('app');
+  // Sync is opt-in: until real Firebase/Google config is pasted in, the app
+  // just runs locally (same as before) with no sign-in required.
+  if(FIREBASE_CONFIGURED){
+    if(!AUTH_CHECKED){
+      app.innerHTML = `<div style="padding:60px 20px; text-align:center;" class="note">Loading…</div>`;
+      return;
+    }
+    if(!AUTH_USER){
+      app.innerHTML = renderSignIn();
+      const btn = document.getElementById('signInBtn');
+      if(btn) btn.addEventListener('click', signInWithGoogle);
+      return;
+    }
+  }
   let body = '';
   if(VIEW==='dashboard') body = renderDashboard();
+  else if(VIEW==='today') body = renderToday();
   else if(VIEW==='list') body = renderList();
   else if(VIEW==='add') body = renderAdd();
   else if(VIEW==='detail') body = renderDetail();
   else if(VIEW==='backup') body = renderBackup();
+
+  const queuedCount = DATA.businesses.filter(b=>b.queued).length;
 
   app.innerHTML = `
     <header class="topbar">
@@ -353,6 +592,7 @@ function render(){
     <main>${body}</main>
     <nav class="tabbar">
       <button data-tab="dashboard" class="${VIEW==='dashboard'?'active':''}"><span class="ic">◔</span>Dashboard</button>
+      <button data-tab="today" class="${VIEW==='today'?'active':''}"><span class="ic">📍${queuedCount?'<span class="badge">'+queuedCount+'</span>':''}</span>Today</button>
       <button data-tab="list" class="${VIEW==='list'?'active':''}"><span class="ic">☰</span>Businesses</button>
       <button data-tab="add" class="${VIEW==='add'?'active':''}"><span class="ic">＋</span>Add</button>
       <button data-tab="backup" class="${VIEW==='backup'?'active':''}"><span class="ic">⤓</span>Backup</button>
@@ -363,14 +603,16 @@ function render(){
 }
 function headerTitle(){
   if(VIEW==='dashboard') return 'Route Book';
+  if(VIEW==='today') return "Today's Route";
   if(VIEW==='list') return 'Businesses';
   if(VIEW==='add') return 'Log a Visit';
   if(VIEW==='detail'){ const b = DATA.businesses.find(x=>x.id===DETAIL_ID); return b? b.businessName : 'Business'; }
-  if(VIEW==='backup') return 'Backup & Restore';
+  if(VIEW==='backup') return 'Backup & Import';
 }
 function headerSub(){
   if(VIEW==='dashboard') return new Date().toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric'});
-  if(VIEW==='list') return `${DATA.businesses.length} stop${DATA.businesses.length===1?'':'s'} on record`;
+  if(VIEW==='today') return 'Imported stops not yet visited';
+  if(VIEW==='list'){ const n = DATA.businesses.filter(b=>!b.queued).length; return `${n} stop${n===1?'':'s'} on record`; }
   if(VIEW==='add') return 'New stop or new contact at an existing stop';
   if(VIEW==='detail'){ const b = DATA.businesses.find(x=>x.id===DETAIL_ID); return b? (b.ownerName||'No owner name on file') : ''; }
   if(VIEW==='backup') return 'Everything stays on this phone';
@@ -386,18 +628,46 @@ function bindTabs(){
 }
 
 /* ================= DASHBOARD ================= */
+function statsSummary(){
+  const visited = DATA.businesses.filter(b=>!b.queued);
+  const count = k => visited.filter(b=>b.lastAction===k).length;
+  const total = visited.length;
+  const won = visited.filter(b=>b.closed==='won').length;
+  const lost = visited.filter(b=>b.closed==='lost').length;
+  const warm = count('send_statement')+count('callback_later')+count('meeting_set')+count('demo_scheduled')+won;
+  const rate = total? Math.round(warm/total*100) : 0;
+  return {total, statement:count('send_statement'), callback:count('callback_later'), meeting:count('meeting_set')+count('demo_scheduled'), won, lost, rate};
+}
+function renderStatsBar(){
+  const s = statsSummary();
+  if(!s.total) return '';
+  return `
+    <div class="detail-card" style="margin-bottom:16px;">
+      <div class="kv" style="border-top:none; padding-top:0;"><span>Total logged</span><span>${s.total}</span></div>
+      <div class="kv"><span>Send Statement</span><span>${s.statement}</span></div>
+      <div class="kv"><span>Callbacks</span><span>${s.callback}</span></div>
+      <div class="kv"><span>Meetings / Demos</span><span>${s.meeting}</span></div>
+      <div class="kv"><span>Signed</span><span>${s.won}</span></div>
+      <div class="kv"><span>Warm outcome rate</span><span>${s.rate}%</span></div>
+    </div>
+  `;
+}
 function renderDashboard(){
-  const active = DATA.businesses.filter(b=>!b.closed && b.nextFollowUp);
+  const active = DATA.businesses.filter(b=>!b.queued && !b.closed && b.nextFollowUp);
   const overdue = active.filter(b=>daysUntil(b.nextFollowUp) < 0).sort((a,c)=>a.nextFollowUp.localeCompare(c.nextFollowUp));
   const today = active.filter(b=>daysUntil(b.nextFollowUp) === 0);
   const soon = active.filter(b=>{const d=daysUntil(b.nextFollowUp); return d>0 && d<=7;}).sort((a,c)=>a.nextFollowUp.localeCompare(c.nextFollowUp));
-  const noOutcome = DATA.businesses.filter(b=>!b.closed && !b.nextFollowUp);
+  const noOutcome = DATA.businesses.filter(b=>!b.queued && !b.closed && !b.nextFollowUp);
+  const queued = DATA.businesses.filter(b=>b.queued).length;
 
   if(!DATA.businesses.length){
-    return `<div class="empty">No stops logged yet.<br><br>Tap <b>Add</b> to log your first visit.</div>`;
+    return `<div class="empty">No stops logged yet.<br><br>Tap <b>Add</b> to log your first visit, or import tonight's list from the <b>Backup</b> tab.</div>`;
   }
 
-  let html = '';
+  let html = renderStatsBar();
+  if(queued){
+    html += `<div class="empty" style="text-align:left; padding:16px 18px; margin-bottom:16px;" data-open-today>📍 <b>${queued}</b> stop${queued===1?'':'s'} queued for today — tap to open <b>Today's Route</b>.</div>`;
+  }
   if(overdue.length){
     html += `<h2 class="section-title">Go back — overdue (${overdue.length})</h2>`;
     html += bizLedger(overdue);
@@ -436,7 +706,7 @@ function bizLedger(list){
 let LIST_FILTER = 'all';
 let LIST_SEARCH = '';
 function renderList(){
-  let list = DATA.businesses.slice();
+  let list = DATA.businesses.filter(b=>!b.queued);
   if(LIST_FILTER==='active') list = list.filter(b=>!b.closed);
   if(LIST_FILTER==='won') list = list.filter(b=>b.closed==='won');
   if(LIST_FILTER==='lost') list = list.filter(b=>b.closed==='lost');
@@ -455,22 +725,54 @@ function renderList(){
   `;
 }
 
+/* ================= TODAY (imported queue) ================= */
+function renderToday(){
+  const queued = DATA.businesses.filter(b=>b.queued);
+  if(!queued.length){
+    return `<div class="empty">Nothing queued right now.<br><br>Go to <b>Backup</b> → <b>Import today's route</b> and paste in tonight's CSV to load your list here.</div>`;
+  }
+  return `<div class="ledger">${queued.map(b=>`
+    <div class="row">
+      <div class="bar" style="background:var(--accent)"></div>
+      <div class="body" data-log-visit="${b.id}">
+        <div class="biz">${escapeHtml(b.businessName)}</div>
+        <div class="meta">${escapeHtml(b.address||'No address on file')}</div>
+        ${b.notes ? `<div class="meta">${escapeHtml(b.notes)}</div>` : ''}
+      </div>
+      <div class="when" style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+        ${b.address ? `<a href="${mapsLink(b.address)}" target="_blank" rel="noopener" style="font-size:11px; color:var(--accent); font-weight:600; text-decoration:none;">Directions ↗</a>` : ''}
+        <button data-skip-queued="${b.id}" style="font-size:11px; color:var(--ink-soft); background:none; border:none; font-family:inherit; padding:0;">Skip</button>
+      </div>
+    </div>
+  `).join('')}</div>
+  <p class="note" style="margin-top:12px;">Tap a business name to log the visit once you've stopped in.</p>`;
+}
+
 /* ================= ADD ================= */
 let ADD_DRAFT = null;
-function freshDraft(){ return {businessName:'', ownerName:'', email:'', posSystem:'', staff:['']}; }
+function freshDraft(){ return {businessName:'', ownerName:'', address:'', phone:'', email:'', posSystem:'', processor:'', notes:'', staff:['']}; }
 function renderAdd(){
   if(!ADD_DRAFT) ADD_DRAFT = freshDraft();
   const d = ADD_DRAFT;
   return `
     <div class="stack">
+      ${d._queuedId ? `<p class="note">Logging a queued stop — this fills in the rest and marks it visited.</p>` : ''}
       <label>Business name</label>
       <input type="text" id="f_biz" value="${escapeHtml(d.businessName)}" placeholder="e.g. Riverside Diner">
+      <label>Address</label>
+      <input type="text" id="f_address" value="${escapeHtml(d.address)}" placeholder="e.g. 123 Main St, Meridian">
       <label>Owner's name</label>
       <input type="text" id="f_owner" value="${escapeHtml(d.ownerName)}" placeholder="e.g. Maria Chen">
+      <label>Phone</label>
+      <input type="text" id="f_phone" value="${escapeHtml(d.phone)}" placeholder="e.g. 208-555-0100">
       <label>Email address</label>
       <input type="text" id="f_email" value="${escapeHtml(d.email)}" placeholder="e.g. maria@riversidediner.com">
       <label>POS system</label>
       <input type="text" id="f_pos" value="${escapeHtml(d.posSystem)}" placeholder="e.g. Toast, Square, Clover">
+      <label>Card processor</label>
+      <input type="text" id="f_processor" value="${escapeHtml(d.processor)}" placeholder="e.g. Heartland, Square, unknown">
+      <label>Notes</label>
+      <textarea id="f_notes" placeholder="Anything else from the conversation">${escapeHtml(d.notes)}</textarea>
       <label>Staff you met</label>
       <div id="staffList">
         ${d.staff.map((s,i)=>`
@@ -507,20 +809,23 @@ function renderDetail(){
       <h3>${escapeHtml(b.businessName)}</h3>
       <p class="owner">${escapeHtml(b.ownerName||'No owner name on file')}</p>
       ${urgencyChip(b)}
+      <div class="kv"><span>Address</span><span>${escapeHtml(b.address||'—')}</span></div>
+      <div class="kv"><span>Phone</span><span>${escapeHtml(b.phone||'—')}</span></div>
       <div class="kv"><span>Email</span><span>${escapeHtml(b.email||'—')}</span></div>
       <div class="kv"><span>POS system</span><span>${escapeHtml(b.posSystem||'—')}</span></div>
+      <div class="kv"><span>Card processor</span><span>${escapeHtml(b.processor||'—')}</span></div>
       <div class="kv"><span>Staff met</span><span>${escapeHtml(staffLine)}</span></div>
       <div class="kv"><span>First visit</span><span>${fmtDate(b.firstContactDate)}</span></div>
       <div class="kv"><span>Last action</span><span>${ACTION_LABEL[b.lastAction]||'—'}</span></div>
       ${b.meetingDateTime ? `<div class="kv"><span>Meeting</span><span>${new Date(b.meetingDateTime).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span></div>` : ''}
+      ${b.notes ? `<div class="kv"><span>Notes</span><span>${escapeHtml(b.notes)}</span></div>` : ''}
     </div>
 
-    ${b.email ? `
     <div class="grid2" style="margin-top:10px;">
-      <a class="btn btn-secondary" href="mailto:${escapeHtml(b.email)}?subject=${encodeURIComponent(b.businessName)}">Email them</a>
-      <button class="btn btn-secondary" id="editBizBtn">Edit info</button>
-    </div>` : `
-    <button class="btn btn-secondary" id="editBizBtn" style="margin-top:10px;">Edit info</button>`}
+      ${b.email ? `<button class="btn btn-secondary" id="emailBizBtn">Email them</button>` : ''}
+      ${b.address ? `<a class="btn btn-secondary" href="${mapsLink(b.address)}" target="_blank" rel="noopener">Directions</a>` : ''}
+    </div>
+    <button class="btn btn-secondary" id="editBizBtn" style="margin-top:10px;">Edit info</button>
 
     ${actions}
     ${canUndo ? `<button class="btn btn-ghost" id="undoActionBtn" style="margin-top:10px;">‹ Back a step</button>` : ''}
@@ -547,6 +852,8 @@ function renderStage1Actions(){
     <div class="action-grid">
       <button class="action-btn pos" data-action="interested"><span class="t">Interested</span><span class="d">Follow up in 1 week</span></button>
       <button class="action-btn pos" data-action="meeting_set"><span class="t">Set a meeting</span><span class="d">Add to calendar</span></button>
+      <button class="action-btn pos" data-action="send_statement"><span class="t">Sending statement</span><span class="d">They'll send their bill</span></button>
+      <button class="action-btn warn" data-action="callback_later"><span class="t">Check back later</span><span class="d">Pick a date</span></button>
       <button class="action-btn warn" data-action="gatekeeper"><span class="t">Hit a gatekeeper</span><span class="d">Come back in 30 days</span></button>
       <button class="action-btn neg" data-action="not_interested"><span class="t">Not interested</span><span class="d">Come back in 3–6 months</span></button>
     </div>
@@ -569,6 +876,21 @@ function renderBackup(){
   return `
     <div class="stack">
       <div class="backup-card">
+        <h3>Account</h3>
+        ${FIREBASE_CONFIGURED
+          ? `<p class="note">Signed in as ${escapeHtml(AUTH_USER? AUTH_USER.email : '')}. Data syncs automatically across any device you sign into.</p>
+             <button class="btn btn-ghost" id="signOutBtn" style="margin-top:10px;">Sign out</button>`
+          : `<p class="note">Sync isn't set up yet — everything below stays on this device only. Paste your Firebase config into the CONFIG section near the top of the script to turn on cross-device sync and Gmail sending.</p>`}
+      </div>
+      <div class="backup-card">
+        <h3>Import today's route</h3>
+        <p class="note">Paste the CSV from your daily prospect list (or any sheet with Business name / Address / Contact / Notes columns), or choose the file. New stops land in the <b>Today</b> tab so you can log each one as you visit.</p>
+        <input type="file" accept=".csv,text/csv" id="importCsvFile" style="margin-top:10px;">
+        <label style="margin-top:12px;">Or paste CSV text</label>
+        <textarea id="importCsvText" rows="4" placeholder="Business name,Address,Contact,Notes&#10;Riverside Diner,123 Main St Boise,..."></textarea>
+        <button class="btn btn-primary" id="importCsvBtn" style="margin-top:10px;">Add to Today's Route</button>
+      </div>
+      <div class="backup-card">
         <h3>Export a backup</h3>
         <p class="note">Downloads a single .json file with every business and its full history. Save it into Files → On My iPhone, iCloud Drive, or a connected external drive.</p>
         <button class="btn btn-primary" id="exportBtn" style="margin-top:12px;">Export backup</button>
@@ -580,7 +902,7 @@ function renderBackup(){
       </div>
       <div class="backup-card">
         <h3>About this app</h3>
-        <p class="note">Everything is stored only in this browser on this phone — nothing is sent to a server. If you clear Safari's website data, reinstall this page, or switch phones, you'll need a backup file to bring your data back. Export regularly, especially before doing anything to Safari's storage.</p>
+        <p class="note">Your data syncs to your account and is also cached in this browser for offline use. Export a backup occasionally anyway — it's your safety net if something ever goes wrong with sync.</p>
       </div>
     </div>
   `;
@@ -590,6 +912,29 @@ function renderBackup(){
 function bindViewHandlers(){
   document.querySelectorAll('[data-open]').forEach(el=>{
     el.addEventListener('click', ()=>{ DETAIL_ID = el.dataset.open; VIEW='detail'; render(); });
+  });
+  document.querySelectorAll('[data-open-today]').forEach(el=>{
+    el.addEventListener('click', ()=>{ VIEW='today'; render(); });
+  });
+  document.querySelectorAll('[data-log-visit]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const b = DATA.businesses.find(x=>x.id===el.dataset.logVisit);
+      if(!b) return;
+      ADD_DRAFT = {
+        businessName:b.businessName, address:b.address||'', ownerName:b.ownerName||'',
+        phone:b.phone||'', email:b.email||'', posSystem:b.posSystem||'', processor:b.processor||'',
+        notes:b.notes||'', staff:[''], _queuedId:b.id
+      };
+      VIEW='add'; render();
+    });
+  });
+  document.querySelectorAll('[data-skip-queued]').forEach(el=>{
+    el.addEventListener('click', (ev)=>{
+      ev.stopPropagation();
+      DATA.businesses = DATA.businesses.filter(b=>b.id!==el.dataset.skipQueued);
+      deleteBusinessRemote(el.dataset.skipQueued);
+      saveData(); render(); toast('Removed from today\'s route');
+    });
   });
 
   if(VIEW==='list'){
@@ -602,9 +947,13 @@ function bindViewHandlers(){
 
   if(VIEW==='add'){
     document.getElementById('f_biz').addEventListener('input', e=>ADD_DRAFT.businessName=e.target.value);
+    document.getElementById('f_address').addEventListener('input', e=>ADD_DRAFT.address=e.target.value);
     document.getElementById('f_owner').addEventListener('input', e=>ADD_DRAFT.ownerName=e.target.value);
+    document.getElementById('f_phone').addEventListener('input', e=>ADD_DRAFT.phone=e.target.value);
     document.getElementById('f_email').addEventListener('input', e=>ADD_DRAFT.email=e.target.value);
     document.getElementById('f_pos').addEventListener('input', e=>ADD_DRAFT.posSystem=e.target.value);
+    document.getElementById('f_processor').addEventListener('input', e=>ADD_DRAFT.processor=e.target.value);
+    document.getElementById('f_notes').addEventListener('input', e=>ADD_DRAFT.notes=e.target.value);
     document.querySelectorAll('[data-staff-idx]').forEach(el=>{
       el.addEventListener('input', e=>{ ADD_DRAFT.staff[+el.dataset.staffIdx] = e.target.value; });
     });
@@ -623,20 +972,33 @@ function bindViewHandlers(){
     });
     const editBtn = document.getElementById('editBizBtn');
     if(editBtn) editBtn.addEventListener('click', ()=>openEditModal(DATA.businesses.find(x=>x.id===DETAIL_ID)));
+    const emailBtn = document.getElementById('emailBizBtn');
+    if(emailBtn) emailBtn.addEventListener('click', ()=>openEmailModal(DATA.businesses.find(x=>x.id===DETAIL_ID)));
     const undoBtn = document.getElementById('undoActionBtn');
     if(undoBtn) undoBtn.addEventListener('click', ()=>handleUndo());
     const del = document.getElementById('deleteBizBtn');
     if(del) del.addEventListener('click', ()=>{
       if(confirm('Delete this business and its whole history? This can\'t be undone.')){
         DATA.businesses = DATA.businesses.filter(b=>b.id!==DETAIL_ID);
+        deleteBusinessRemote(DETAIL_ID);
         saveData(); VIEW='list'; render(); toast('Deleted');
       }
     });
   }
 
   if(VIEW==='backup'){
+    const signOutBtn = document.getElementById('signOutBtn');
+    if(signOutBtn) signOutBtn.addEventListener('click', signOutOfApp);
     document.getElementById('exportBtn').addEventListener('click', exportBackup);
     document.getElementById('importFile').addEventListener('change', importBackup);
+    document.getElementById('importCsvBtn').addEventListener('click', importCsvRoute);
+    document.getElementById('importCsvFile').addEventListener('change', e=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = evt=>{ document.getElementById('importCsvText').value = evt.target.result; };
+      reader.readAsText(file);
+    });
   }
 }
 function focusLastStaff(){
@@ -649,24 +1011,43 @@ function saveNewVisit(){
   if(!d.businessName.trim()){ toast('Business name is required'); return; }
   const dateEl = document.getElementById('f_date');
   const visitDate = dateEl.value || todayISO();
-  const biz = {
-    id: uid(),
+  const fields = {
     businessName: d.businessName.trim(),
+    address: d.address.trim(),
     ownerName: d.ownerName.trim(),
+    phone: d.phone.trim(),
     email: d.email.trim(),
     posSystem: d.posSystem.trim(),
-    staff: d.staff.map(s=>s.trim()).filter(Boolean),
-    firstContactDate: visitDate,
-    lastAction: 'first_contact',
-    hadMeeting: false,
-    nextFollowUp: null,
-    closed: null,
-    meetingDateTime: null,
-    undoStack: [],
-    history: [{date:visitDate, label:'First visit logged', note: d.posSystem? ('POS: '+d.posSystem):''}]
+    processor: d.processor.trim(),
+    notes: d.notes.trim(),
+    staff: d.staff.map(s=>s.trim()).filter(Boolean)
   };
-  DATA.businesses.push(biz);
+  let biz;
+  if(d._queuedId && (biz = DATA.businesses.find(x=>x.id===d._queuedId))){
+    Object.assign(biz, fields);
+    biz.queued = false;
+    biz.firstContactDate = visitDate;
+    biz.lastAction = 'first_contact';
+    if(!biz.history) biz.history = [];
+    biz.history.push({date:visitDate, label:'First visit logged', note: d.processor? ('Processor: '+d.processor):(d.posSystem? ('POS: '+d.posSystem):'')});
+  } else {
+    biz = {
+      id: uid(),
+      ...fields,
+      firstContactDate: visitDate,
+      lastAction: 'first_contact',
+      hadMeeting: false,
+      nextFollowUp: null,
+      closed: null,
+      meetingDateTime: null,
+      queued: false,
+      undoStack: [],
+      history: [{date:visitDate, label:'First visit logged', note: d.processor? ('Processor: '+d.processor):(d.posSystem? ('POS: '+d.posSystem):'')}]
+    };
+    DATA.businesses.push(biz);
+  }
   saveData();
+  persistBusiness(biz);
   ADD_DRAFT = null;
   DETAIL_ID = biz.id;
   VIEW = 'detail';
@@ -691,7 +1072,7 @@ function handleUndo(){
   b.closed = prev.closed;
   b.meetingDateTime = prev.meetingDateTime;
   if(b.history.length > 1) b.history.pop();
-  saveData(); render(); toast('Reverted to previous step');
+  saveData(); persistBusiness(b); render(); toast('Reverted to previous step');
 }
 function openEditModal(b){
   if(!b) return;
@@ -702,12 +1083,20 @@ function openEditModal(b){
       <h3>Edit business</h3>
       <label>Business name</label>
       <input type="text" id="e_biz" value="${escapeHtml(b.businessName)}">
+      <label>Address</label>
+      <input type="text" id="e_address" value="${escapeHtml(b.address||'')}">
       <label>Owner's name</label>
       <input type="text" id="e_owner" value="${escapeHtml(b.ownerName||'')}">
+      <label>Phone</label>
+      <input type="text" id="e_phone" value="${escapeHtml(b.phone||'')}">
       <label>Email address</label>
       <input type="text" id="e_email" value="${escapeHtml(b.email||'')}">
       <label>POS system</label>
       <input type="text" id="e_pos" value="${escapeHtml(b.posSystem||'')}">
+      <label>Card processor</label>
+      <input type="text" id="e_processor" value="${escapeHtml(b.processor||'')}">
+      <label>Notes</label>
+      <textarea id="e_notes" rows="3">${escapeHtml(b.notes||'')}</textarea>
       <label>Staff (one per line)</label>
       <textarea id="e_staff" rows="3">${escapeHtml((b.staff||[]).join('\n'))}</textarea>
       <button class="btn btn-primary" id="saveEditBtn" style="margin-top:18px;">Save changes</button>
@@ -720,14 +1109,70 @@ function openEditModal(b){
     const name = document.getElementById('e_biz').value.trim();
     if(!name){ toast('Business name is required'); return; }
     b.businessName = name;
+    b.address = document.getElementById('e_address').value.trim();
     b.ownerName = document.getElementById('e_owner').value.trim();
+    b.phone = document.getElementById('e_phone').value.trim();
     b.email = document.getElementById('e_email').value.trim();
     b.posSystem = document.getElementById('e_pos').value.trim();
+    b.processor = document.getElementById('e_processor').value.trim();
+    b.notes = document.getElementById('e_notes').value.trim();
     b.staff = document.getElementById('e_staff').value.split('\n').map(s=>s.trim()).filter(Boolean);
     saveData();
+    persistBusiness(b);
     overlay.remove();
     render();
     toast('Business updated');
+  });
+}
+function openEmailModal(b){
+  if(!b) return;
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay';
+  const defaultSubject = 'Following up — '+b.businessName;
+  const defaultBody = 'Hi '+(b.ownerName||'there')+',\n\n';
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Email ${escapeHtml(b.businessName)}</h3>
+      <label>To</label>
+      <input type="text" id="em_to" value="${escapeHtml(b.email)}">
+      <label>Subject</label>
+      <input type="text" id="em_subject" value="${escapeHtml(defaultSubject)}">
+      <label>Message</label>
+      <textarea id="em_body" rows="6">${escapeHtml(defaultBody)}</textarea>
+      <p class="note" id="em_status" style="margin-top:8px;">Sends from ${GMAIL_TOKEN?'your connected Gmail':(AUTH_USER?AUTH_USER.email:'your Google account')}.</p>
+      <button class="btn btn-primary" id="sendEmailBtn" style="margin-top:14px;">${GMAIL_TOKEN?'Send':'Connect Gmail & Send'}</button>
+      <a class="btn btn-secondary" id="mailtoFallback" style="margin-top:10px;" href="#">Open in Mail app instead</a>
+      <button class="btn btn-ghost" id="cancelEmail" style="margin-top:10px;">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+  document.getElementById('cancelEmail').addEventListener('click', ()=>overlay.remove());
+  const buildMailto = ()=>{
+    const to = document.getElementById('em_to').value.trim();
+    const subject = document.getElementById('em_subject').value;
+    const body = document.getElementById('em_body').value;
+    return 'mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  };
+  document.getElementById('mailtoFallback').addEventListener('click', (e)=>{ e.currentTarget.href = buildMailto(); });
+  document.getElementById('sendEmailBtn').addEventListener('click', async ()=>{
+    const to = document.getElementById('em_to').value.trim();
+    const subject = document.getElementById('em_subject').value.trim();
+    const body = document.getElementById('em_body').value;
+    if(!to){ toast('Add a recipient'); return; }
+    const btn = document.getElementById('sendEmailBtn');
+    btn.textContent = 'Sending…'; btn.disabled = true;
+    try{
+      await sendGmail(to, subject, body);
+      const today = todayISO();
+      if(!b.history) b.history = [];
+      b.history.push({date:today, label:'Emailed', note:subject});
+      saveData(); persistBusiness(b);
+      overlay.remove(); render();
+      toast('Email sent');
+    }catch(err){
+      btn.textContent = 'Send'; btn.disabled = false;
+      document.getElementById('em_status').textContent = 'Could not send — check the "Open in Mail app instead" link below, or try again.';
+    }
   });
 }
 function handleAction(action){
@@ -737,12 +1182,16 @@ function handleAction(action){
   if(action==='meeting_set'){ openMeetingModal(b, 'meeting_set'); return; }
   if(action==='demo_scheduled'){ openMeetingModal(b, 'demo_scheduled'); return; }
   if(action==='not_interested'){ openNotInterestedModal(b); return; }
+  if(action==='callback_later'){ openCallbackModal(b); return; }
 
   snapshot(b);
   const today = todayISO();
   if(action==='interested'){
     b.lastAction='interested'; b.nextFollowUp = addDays(today,7);
     b.history.push({date:today, label:ACTION_LABEL.interested});
+  } else if(action==='send_statement'){
+    b.lastAction='send_statement'; b.nextFollowUp = addDays(today,4);
+    b.history.push({date:today, label:ACTION_LABEL.send_statement, note:'Follow up if statement hasn\'t arrived'});
   } else if(action==='gatekeeper'){
     b.lastAction='gatekeeper'; b.nextFollowUp = addDays(today,30);
     b.history.push({date:today, label:ACTION_LABEL.gatekeeper});
@@ -756,7 +1205,7 @@ function handleAction(action){
     b.lastAction='not_closed'; b.nextFollowUp=null; b.closed='lost';
     b.history.push({date:today, label:ACTION_LABEL.not_closed});
   }
-  saveData(); render(); toast('Updated');
+  saveData(); persistBusiness(b); render(); toast('Updated');
 }
 
 function openNotInterestedModal(b){
@@ -784,10 +1233,36 @@ function openNotInterestedModal(b){
     b.lastAction='not_interested';
     b.nextFollowUp = addDays(today, days);
     b.history.push({date:today, label:ACTION_LABEL.not_interested, note:(days===90?'3 month':'6 month')+' revisit'});
-    saveData(); overlay.remove(); render(); toast('Updated');
+    saveData(); persistBusiness(b); overlay.remove(); render(); toast('Updated');
   });
 }
 
+function openCallbackModal(b){
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay';
+  const defaultDate = addDays(todayISO(), 21);
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Check back later</h3>
+      <p class="note">When did they say to reach back out?</p>
+      <label>Date</label>
+      <input type="date" id="callbackDate" value="${defaultDate}">
+      <button class="btn btn-primary" id="confirmCallback" style="margin-top:18px;">Save</button>
+      <button class="btn btn-ghost" id="cancelCallback" style="margin-top:10px;">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+  document.getElementById('cancelCallback').addEventListener('click', ()=>overlay.remove());
+  document.getElementById('confirmCallback').addEventListener('click', ()=>{
+    const val = document.getElementById('callbackDate').value;
+    if(!val){ toast('Pick a date'); return; }
+    const today = todayISO();
+    snapshot(b);
+    b.lastAction='callback_later'; b.nextFollowUp = val;
+    b.history.push({date:today, label:ACTION_LABEL.callback_later, note:'Check back '+fmtDate(val)});
+    saveData(); persistBusiness(b); overlay.remove(); render(); toast('Saved');
+  });
+}
 function openMeetingModal(b, action){
   const isDemo = action==='demo_scheduled';
   const overlay = document.createElement('div');
@@ -820,6 +1295,7 @@ function openMeetingModal(b, action){
       b.history.push({date:today, label:ACTION_LABEL.meeting_set, note:'Meeting on '+fmtDate(followUpDate)});
     }
     saveData();
+    persistBusiness(b);
     downloadICS(b, dt, isDemo? 'Demo' : 'Meeting');
     overlay.remove(); render(); toast('Saved — opening calendar file');
   });
@@ -846,6 +1322,47 @@ function downloadICS(b, dt, kind){
   setTimeout(()=>URL.revokeObjectURL(url), 4000);
 }
 
+/* ================= route import ================= */
+function importCsvRoute(){
+  const text = document.getElementById('importCsvText').value;
+  if(!text.trim()){ toast('Paste or choose a CSV first'); return; }
+  let rows;
+  try{ rows = parseCSV(text); }catch(e){ toast('Could not read that CSV'); return; }
+  if(!rows.length){ toast('No rows found'); return; }
+  const existingKey = b => (b.businessName+'|'+b.address).toLowerCase();
+  const existing = new Set(DATA.businesses.map(existingKey));
+  const today = todayISO();
+  let added = 0;
+  rows.forEach(r=>{
+    const businessName = pick(r, ['business name','business','name']);
+    if(!businessName) return;
+    const city = pick(r, ['city']);
+    let address = pick(r, ['address','address (city)']);
+    if(city && !address.toLowerCase().includes(city.toLowerCase())) address = address ? address+', '+city : city;
+    const contact = pick(r, ['contact info','contact','phone','email']);
+    const owner = pick(r, ['owner/agent name','owner','owner/agent']);
+    const notesParts = [pick(r,['note','notes'])];
+    if(owner) notesParts.unshift('Owner/agent: '+owner);
+    const notes = notesParts.filter(Boolean).join(' — ');
+    const key = (businessName+'|'+address).toLowerCase();
+    if(existing.has(key)) return;
+    existing.add(key);
+    const biz = {
+      id: uid(), businessName, address, ownerName:'', phone:/\d{3}.*\d{4}/.test(contact)?contact:'',
+      email: contact.includes('@')?contact:'', posSystem:'', processor:'', notes,
+      staff:[], firstContactDate:null, lastAction:null, hadMeeting:false, nextFollowUp:null,
+      closed:null, meetingDateTime:null, queued:true, routeDate:today, undoStack:[], history:[]
+    };
+    DATA.businesses.push(biz);
+    persistBusiness(biz);
+    added++;
+  });
+  saveData();
+  document.getElementById('importCsvText').value='';
+  render();
+  toast(added ? `Added ${added} stop${added===1?'':'s'} to Today` : 'Nothing new to add — already on file');
+}
+
 /* ================= backup ================= */
 function exportBackup(){
   const blob = new Blob([JSON.stringify(DATA, null, 2)], {type:'application/json'});
@@ -865,8 +1382,10 @@ function importBackup(e){
     try{
       const parsed = JSON.parse(evt.target.result);
       if(!parsed || !Array.isArray(parsed.businesses)) throw new Error('bad format');
-      if(!confirm('This replaces all data currently on this phone with the backup file. Continue?')) return;
+      const syncNote = (fb && AUTH_USER) ? ' and your synced data' : '';
+      if(!confirm('This replaces all data currently on this phone'+syncNote+' with the backup file. Continue?')) return;
       DATA = parsed;
+      DATA.businesses.forEach(b=>{ if(!b.id) b.id = uid(); persistBusiness(b); });
       saveData();
       VIEW='dashboard';
       render();
@@ -878,7 +1397,7 @@ function importBackup(e){
   reader.readAsText(file);
 }
 
-render();
+initAuth();
 </script>
 </body>
 </html>
